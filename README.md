@@ -1,16 +1,65 @@
-**Arquitetura Base**
-* A **Admissão** (processo pai) gere o sistema central, recebendo dados de um sensor externo através de um *Named Pipe* (`input_pipe`) e utilizando a chamada `select()` para multiplexagem de eventos.
-* A **Triagem** opera através de uma *pool* dinâmica de *threads* (T1, T2...) que acedem partilhadamente ao *buffer* circular da fila de admissão.
-* O **Atendimento Médico** utiliza processos independentes gerados por `fork()` para isolar falhas de execução, impedindo que erros locais (como *segmentation faults*) comprometam o processo principal.
+# Emergency Room Management System (C / POSIX)
 
-**Comunicação (IPC) e Controlo de Concorrência**
-* O estado global e as estatísticas assentam em **Memória Partilhada** (SHM) protegida rigorosamente por semáforos POSIX binários, de forma a prevenir *race conditions*.
-* O encaminhamento seguro entre a triagem e os médicos é efetuado por uma **Fila de Mensagens** (`mq_doctor_prio`), que usufrui da ordenação nativa do sistema operativo para priorizar doentes urgentes.
-* A gestão de entrada na fila circular recorre a políticas não-bloqueantes (`sem_trywait`) com dois semáforos de controlo, prevenindo o bloqueio do sistema quando a fila se encontra cheia.
+> 🇵🇹 [Versão em português](README.pt.md)
 
-**Resiliência e Tolerância a Falhas**
-* O sistema implementa *Memory Mapped Files* (MMF) para otimizar o registo de eventos no ficheiro de *log*, delegando a sincronização com o disco ao próprio *kernel*.
-* O processo principal monitoriza ativamente a morte dos processos médicos, gerindo substituições automáticas de turnos e lançando reforços temporários durante picos de carga de forma dinâmica.
-* A interrupção do sistema (via SIGINT) desencadeia um protocolo de encerramento gracioso que aguarda a conclusão dos atendimentos em curso e liberta todos os recursos adequadamente, prevenindo a existência de processos *zombie*.
+A concurrent simulation of a hospital emergency department, written in **C** on top of **POSIX** primitives. It combines multiple processes, threads and inter-process communication mechanisms to admit, triage and treat patients, while staying resilient to failures.
 
-A construção técnica desta simulação utilizou intensivamente normas POSIX e foi concluída com mais de 50 horas de trabalho investido.
+*Over 50 hours of development.*
+
+## ✨ Highlights
+- Multi-process **and** multi-threaded design (`fork()` + thread pool)
+- IPC: named pipes, shared memory, POSIX message queues, memory-mapped files
+- Synchronization with POSIX semaphores and non-blocking `sem_trywait`
+- Fault isolation, process supervision, dynamic scaling under load
+- Graceful shutdown with full resource cleanup and no zombie processes
+
+## 🏗️ Architecture
+
+```mermaid
+flowchart LR
+    S[External sensor] -->|named pipe<br/>input_pipe| A[Admission<br/>parent process<br/>select]
+    A -->|circular buffer| T[Triage<br/>thread pool T1..Tn]
+    T -->|POSIX message queue<br/>mq_doctor_prio| D1[Doctor process]
+    T --> D2[Doctor process]
+    T --> D3[Temporary doctor]
+    A -.supervises / respawns.-> D1
+    A -.supervises / respawns.-> D2
+    SHM[(Shared memory<br/>state + statistics)] --- A
+    SHM --- T
+    SHM --- D1
+    LOG[(Log<br/>memory-mapped file)] --- A
+```
+
+### 1. Core architecture
+- **Admission (parent process):** receives patient data from an external sensor through a named pipe (`input_pipe`) and multiplexes events with `select()`.
+- **Triage:** a dynamic thread pool (T1, T2, …) shares a **circular buffer** that serves as the admission queue.
+- **Medical care:** each doctor is an independent process created with `fork()`, isolating faults so local errors (e.g. segmentation faults) never crash the main process.
+
+### 2. IPC and concurrency control
+- **Shared state:** global state and statistics live in **shared memory**, protected by binary **POSIX semaphores** to prevent race conditions.
+- **Triage → doctor routing:** a **POSIX message queue** (`mq_doctor_prio`) delivers patients to doctors, using the OS's native message priorities so urgent patients are seen first.
+- **Queue entry:** insertion into the circular buffer uses non-blocking `sem_trywait` with two control semaphores, so the system never blocks when the queue is full.
+
+### 3. Resilience and fault tolerance
+- **Event logging:** events are written to a **memory-mapped file**; the kernel handles syncing to disk.
+- **Process supervision:** the parent detects dead doctor processes, rotates shifts automatically and spawns **temporary reinforcements** during peak load.
+- **Graceful shutdown:** `SIGINT` triggers a shutdown that waits for ongoing consultations, releases every resource and prevents zombie processes.
+
+## 🔨 Build & Run
+> ✏️ **Diogo: preenche com os teus comandos reais e apaga esta linha.**
+
+```bash
+# Build
+gcc -Wall -Wextra -pthread -o urgencias *.c -lrt   # ou: make
+
+# Run
+./urgencias [ficheiro_config]
+
+# Send patients (another terminal)
+echo "..." > input_pipe
+```
+
+Requires Linux (POSIX shared memory, message queues and semaphores).
+
+## 👤 Author
+**Diogo Silva**, Computer Engineering @ University of Coimbra
